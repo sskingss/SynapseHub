@@ -285,10 +285,219 @@ async function runDemo() {
     console.log(`    - ${item.title} [${item.tags.join(", ")}]`);
   }
 
+  // ── Step 10: Knowledge Graph — Create Relations ─────
+
+  log("Step 10", "Building knowledge graph relations...");
+
+  const rateLimitItem = storedItems[0]!;
+  const authItem = storedItems[1]!;
+  const dbMigrationItem = storedItems[2]!;
+  const incidentItem = storedItems[3]!;
+  const apiVersioningItem = storedItems[4]!;
+  const k8sItem = storedItems[5]!;
+  const frontendItem = storedItems[6]!;
+
+  const relations = [
+    { source_id: incidentItem.id, target_id: rateLimitItem.id, relation_type: "references", created_by: "incident-bot" },
+    { source_id: rateLimitItem.id, target_id: authItem.id, relation_type: "depends_on", created_by: "architecture-bot" },
+    { source_id: apiVersioningItem.id, target_id: rateLimitItem.id, relation_type: "references", created_by: "architecture-bot" },
+    { source_id: k8sItem.id, target_id: rateLimitItem.id, relation_type: "references", created_by: "devops-bot" },
+    { source_id: dbMigrationItem.id, target_id: apiVersioningItem.id, relation_type: "precedes", created_by: "devops-bot" },
+    { source_id: frontendItem.id, target_id: authItem.id, relation_type: "depends_on", created_by: "frontend-agent" },
+  ];
+
+  for (const rel of relations) {
+    await api("POST", "/api/v1/graph/relations", rel);
+    console.log(`  Created: ${rel.relation_type} (${rel.source_id.slice(0, 8)}... -> ${rel.target_id.slice(0, 8)}...)`);
+  }
+
+  // ── Step 11: Knowledge Graph — Query Neighbors ─────
+
+  log("Step 11", `Querying neighbors of "Rate Limiting Strategy"...`);
+  const neighbors = await api("GET", `/api/v1/graph/neighbors/${rateLimitItem.id}?depth=1`);
+  console.log(`  Found ${neighbors.nodes.length} neighbors, ${neighbors.edges.length} edges:`);
+  for (const node of neighbors.nodes) {
+    console.log(`    - ${node.title} [${node.content_type}]`);
+  }
+
+  // ── Step 12: Knowledge Graph — Find Path ───────────
+
+  log("Step 12", `Finding path from "Frontend Error Tracking" to "Rate Limiting"...`);
+  try {
+    const path = await api("POST", "/api/v1/graph/path", {
+      source_id: frontendItem.id,
+      target_id: rateLimitItem.id,
+      max_depth: 5,
+    });
+    console.log(`  Path found (depth ${path.depth}): ${path.path.map((id: string) => id.slice(0, 8)).join(" -> ")}`);
+    for (const edge of path.edges) {
+      console.log(`    Edge: ${edge.relation_type} (${edge.source_id.slice(0, 8)}... -> ${edge.target_id.slice(0, 8)}...)`);
+    }
+  } catch {
+    console.log("  No path found between these nodes.");
+  }
+
+  // ── Step 13: Knowledge Graph — Subgraph ────────────
+
+  log("Step 13", `Extracting subgraph around "Rate Limiting Strategy" (depth=2)...`);
+  const subgraph = await api("POST", "/api/v1/graph/subgraph", {
+    node_id: rateLimitItem.id,
+    depth: 2,
+    limit: 50,
+  });
+  console.log(`  Subgraph: ${subgraph.nodes.length} nodes, ${subgraph.edges.length} edges`);
+  for (const node of subgraph.nodes) {
+    console.log(`    Node: ${node.title}`);
+  }
+
+  // ── Step 14: Graph-Aware Search ────────────────────
+
+  log("Step 14", 'Graph-aware search: "rate limiting and authentication"...');
+  const graphResults = await api("POST", "/api/v1/search/graph", {
+    query: "rate limiting and authentication",
+    namespace: namespace.id,
+    include_relations: true,
+    relation_depth: 1,
+    limit: 3,
+  });
+  console.log(`  Found ${graphResults.count} results with graph relations:`);
+  for (const r of graphResults.results) {
+    console.log(`    - [score=${r.score}] ${r.title}`);
+    if (r.related_items?.length > 0) {
+      console.log(`      Related (${r.related_items.length}):`);
+      for (const rel of r.related_items) {
+        console.log(`        -> ${rel.item.title} [${rel.relation.relation_type}]`);
+      }
+    }
+  }
+
+  // ── Step 15: Create Workflow Template ──────────────
+
+  log("Step 15", "Creating 'Code Review & Deploy' workflow template...");
+  const workflow = await api("POST", "/api/v1/workflows", {
+    namespace_id: namespace.id,
+    name: "Code Review and Deploy",
+    description: "Standard code review, testing, and deployment pipeline",
+    created_by: "devops-bot",
+    steps: [
+      { step_key: "code-review", name: "Code Review", step_type: "approval", description: "Peer code review", knowledge_item_id: dbMigrationItem.id },
+      { step_key: "run-tests", name: "Run Tests", step_type: "automated", description: "Execute test suite" },
+      { step_key: "security-scan", name: "Security Scan", step_type: "automated", description: "SAST/DAST scanning", knowledge_item_id: authItem.id },
+      { step_key: "staging-deploy", name: "Deploy to Staging", step_type: "automated", description: "Deploy to staging environment" },
+      { step_key: "prod-approval", name: "Production Approval", step_type: "approval", description: "Approve production deployment" },
+      { step_key: "prod-deploy", name: "Deploy to Production", step_type: "automated", description: "Deploy to production", knowledge_item_id: k8sItem.id },
+    ],
+    edges: [
+      { from_step_key: "code-review", to_step_key: "run-tests", label: "approved" },
+      { from_step_key: "code-review", to_step_key: "security-scan", label: "approved" },
+      { from_step_key: "run-tests", to_step_key: "staging-deploy", label: "tests pass" },
+      { from_step_key: "security-scan", to_step_key: "staging-deploy", label: "no vulnerabilities" },
+      { from_step_key: "staging-deploy", to_step_key: "prod-approval" },
+      { from_step_key: "prod-approval", to_step_key: "prod-deploy", label: "approved" },
+    ],
+  });
+  console.log(`  Created workflow: "${workflow.name}" (v${workflow.version})`);
+  console.log(`  Steps: ${workflow.steps.length}, Edges: ${workflow.edges.length}`);
+
+  // ── Step 16: Activate & Execute Workflow ───────────
+
+  log("Step 16", "Activating and executing workflow...");
+  await api("PUT", `/api/v1/workflows/${workflow.id}`, { status: "active" });
+  console.log("  Workflow activated.");
+
+  const execution = await api("POST", `/api/v1/workflows/${workflow.id}/execute`, {
+    initiated_by: "developer-alice",
+    context: { pr_number: 1234, branch: "feature/add-caching" },
+  });
+  console.log(`  Execution started: ${execution.id}`);
+  console.log(`  Status: ${execution.status}`);
+  console.log(`  Step statuses:`);
+  for (const se of execution.step_executions) {
+    console.log(`    - ${se.step_name}: ${se.status}`);
+  }
+
+  // ── Step 17: Progress Through Workflow ─────────────
+
+  log("Step 17", "Progressing through workflow steps...");
+  const codeReviewStep = execution.step_executions.find((se: any) => se.step_key === "code-review");
+  if (codeReviewStep) {
+    const afterReview = await api(
+      "POST",
+      `/api/v1/workflows/executions/${execution.id}/steps/${codeReviewStep.step_id}/complete`,
+      { output: { reviewer: "bob", approved: true }, status: "completed" },
+    );
+    console.log("  Code Review completed. Updated statuses:");
+    for (const se of afterReview.step_executions) {
+      console.log(`    - ${se.step_name}: ${se.status}`);
+    }
+  }
+
+  // ── Step 18: View Execution Details ────────────────
+
+  log("Step 18", "Viewing execution details...");
+  const execDetail = await api("GET", `/api/v1/workflows/executions/${execution.id}`);
+  console.log(`  Execution ${execDetail.id}:`);
+  console.log(`    Status: ${execDetail.status}`);
+  console.log(`    Initiated by: ${execDetail.initiated_by}`);
+  console.log(`    Steps:`);
+  for (const se of execDetail.step_executions) {
+    console.log(`      - ${se.step_name}: ${se.status}${se.output ? ` (output: ${JSON.stringify(se.output)})` : ""}`);
+  }
+
+  // ── Step 19: List Workflows & Executions ───────────
+
+  log("Step 19", "Listing workflows and executions...");
+  const workflows = await api("GET", `/api/v1/workflows?namespace_id=${namespace.id}`);
+  console.log(`  Workflows: ${workflows.total}`);
+  for (const wf of workflows.data) {
+    console.log(`    - ${wf.name} (v${wf.version}, ${wf.status})`);
+  }
+
+  const executions = await api("GET", `/api/v1/workflows/executions?namespace_id=${namespace.id}`);
+  console.log(`  Executions: ${executions.total}`);
+  for (const ex of executions.data) {
+    console.log(`    - ${ex.id.slice(0, 8)}... [${ex.status}] started ${ex.started_at}`);
+  }
+
+  // ── Step 20: Pattern Analysis ──────────────────────
+
+  log("Step 20", "Running pattern analysis on the namespace...");
+  const patterns = await api("POST", "/api/v1/patterns/analyze", {
+    namespace_id: namespace.id,
+    pattern_types: ["collaboration", "knowledge_cluster"],
+    min_frequency: 1,
+  });
+  console.log(`  Discovered ${patterns.count} patterns:`);
+  for (const p of patterns.patterns) {
+    console.log(`    - [${p.pattern_type}] ${p.name} (freq=${p.frequency}, conf=${p.confidence.toFixed(2)})`);
+  }
+
+  // ── Step 21: List & Recommend Patterns ─────────────
+
+  log("Step 21", "Listing patterns and getting recommendations...");
+  const allPatterns = await api("GET", `/api/v1/patterns?namespace_id=${namespace.id}`);
+  console.log(`  Total patterns: ${allPatterns.total}`);
+
+  const recommendations = await api("POST", "/api/v1/patterns/recommend", {
+    namespace_id: namespace.id,
+    limit: 3,
+  });
+  console.log(`  Top ${recommendations.count} recommended patterns:`);
+  for (const p of recommendations.patterns) {
+    console.log(`    - [${p.pattern_type}] ${p.name}`);
+  }
+
   // ── Done ─────────────────────────────────────────────
 
   console.log(`\n${"═".repeat(60)}`);
   console.log("  Demo completed successfully!");
+  console.log("  Features demonstrated:");
+  console.log("    - Knowledge CRUD & Search (semantic, full-text, hybrid)");
+  console.log("    - Knowledge Graph (relations, neighbors, paths, subgraph)");
+  console.log("    - Graph-Aware Search (search with relation expansion)");
+  console.log("    - Workflow Templates (DAG creation, validation)");
+  console.log("    - Workflow Execution (step progression, status tracking)");
+  console.log("    - Pattern Discovery (collaboration, knowledge clusters)");
   console.log(`${"═".repeat(60)}\n`);
 }
 

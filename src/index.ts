@@ -8,12 +8,18 @@ import { createEmbeddingProvider } from "./services/embedding.service.js";
 import { createStorageProvider } from "./services/storage.service.js";
 import { KnowledgeService } from "./services/knowledge.service.js";
 import { SearchService } from "./services/search.service.js";
+import { GraphService } from "./services/graph.service.js";
+import { WorkflowService } from "./services/workflow.service.js";
+import { PatternService } from "./services/pattern.service.js";
 import { healthRoutes } from "./routes/health.routes.js";
 import { namespaceRoutes } from "./routes/namespaces.routes.js";
 import { collectionRoutes } from "./routes/collections.routes.js";
 import { knowledgeRoutes } from "./routes/knowledge.routes.js";
 import { searchRoutes } from "./routes/search.routes.js";
 import { fileRoutes } from "./routes/files.routes.js";
+import { graphRoutes } from "./routes/graph.routes.js";
+import { workflowRoutes } from "./routes/workflow.routes.js";
+import { patternRoutes } from "./routes/pattern.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -44,6 +50,9 @@ async function main() {
   const storageProvider = createStorageProvider();
   const knowledgeService = new KnowledgeService(embeddingProvider);
   const searchService = new SearchService(embeddingProvider);
+  const graphService = new GraphService();
+  const workflowService = new WorkflowService();
+  const patternService = new PatternService();
 
   app.log.info(`Embedding provider: ${config.EMBEDDING_PROVIDER} (dim=${config.EMBEDDING_DIMENSION})`);
 
@@ -57,8 +66,11 @@ async function main() {
     await protectedApp.register(namespaceRoutes(knowledgeService));
     await protectedApp.register(collectionRoutes(knowledgeService));
     await protectedApp.register(knowledgeRoutes(knowledgeService));
-    await protectedApp.register(searchRoutes(searchService));
+    await protectedApp.register(searchRoutes(searchService, graphService));
     await protectedApp.register(fileRoutes(knowledgeService, storageProvider));
+    await protectedApp.register(graphRoutes(graphService));
+    await protectedApp.register(workflowRoutes(workflowService));
+    await protectedApp.register(patternRoutes(patternService));
   });
 
   // ── Graceful shutdown ─────────────────────────────────

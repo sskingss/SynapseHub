@@ -1,11 +1,24 @@
 import { sql, SQL } from "drizzle-orm";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/connection.js";
-import { knowledgeItems } from "../db/schema.js";
-import type { EmbeddingProvider, SearchRequest, SearchResult } from "../types/index.js";
+import { knowledgeItems, knowledgeRelations } from "../db/schema.js";
+import type { GraphService } from "./graph.service.js";
+import type {
+  EmbeddingProvider,
+  SearchRequest,
+  SearchResult,
+  GraphSearchRequest,
+  GraphSearchResult,
+} from "../types/index.js";
 
 export class SearchService {
+  private graphService: GraphService | null = null;
+
   constructor(private embeddingProvider: EmbeddingProvider) {}
+
+  setGraphService(graphService: GraphService) {
+    this.graphService = graphService;
+  }
 
   /**
    * Hybrid search combining semantic similarity and full-text search
@@ -212,6 +225,45 @@ export class SearchService {
         ...r.item,
         score: Math.round(r.score * 10000) / 10000,
       }));
+  }
+
+  /**
+   * Graph-aware search: performs a standard search then enriches results
+   * with related nodes from the knowledge graph.
+   */
+  async graphSearch(req: GraphSearchRequest): Promise<GraphSearchResult[]> {
+    if (!this.graphService) {
+      throw new Error("GraphService not configured");
+    }
+
+    const baseResults = await this.search(req);
+    const relationDepth = req.relation_depth ?? 1;
+
+    const enriched: GraphSearchResult[] = [];
+
+    for (const result of baseResults) {
+      const neighbors = await this.graphService.getNeighbors({
+        node_id: result.id,
+        direction: "both",
+        depth: relationDepth,
+        limit: 5,
+      });
+
+      enriched.push({
+        ...result,
+        related_items: neighbors.nodes.map((node) => {
+          const edge = neighbors.edges.find(
+            (e) => e.source_id === node.id || e.target_id === node.id,
+          );
+          return {
+            item: node,
+            relation: edge!,
+          };
+        }).filter((ri) => ri.relation !== undefined),
+      });
+    }
+
+    return enriched;
   }
 
   private buildFilterConditions(req: SearchRequest): SQL | undefined {

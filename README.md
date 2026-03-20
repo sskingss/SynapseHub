@@ -347,6 +347,25 @@ SynapseHub/
 
 ## Integrating with Your Agents
 
+### Best Practices: When Should Agents Read and Write?
+
+Controlling the timing of knowledge access is crucial for building effective, collaborative agents. Here is the recommended lifecycle for agent interactions with SynapseHub:
+
+**When to Read (Search/Retrieve)**
+- **Initialization & Planning (Pre-hook):** Before executing a complex task, automatically query the hub for related context, past similar tasks, or system guidelines to avoid repeating mistakes.
+- **Just-in-Time Context (Tool Calling):** During execution, if the agent realizes it lacks specific facts (e.g., "What is the API endpoint for billing?"), it should use the search tool autonomously.
+- **Error Recovery:** When encountering a failure, search the knowledge base for the error message or stack trace to see if a fix is already documented.
+
+**When to Write (Store)**
+- **Task Completion (Post-hook):** Upon successfully completing a non-trivial task, the agent should summarize the problem, steps taken, and the solution, then store it for future agents.
+- **Explicit Instruction:** When a human user explicitly instructs the agent to "remember this," "document this," or "add this to our guidelines."
+- **New Discoveries:** When an agent identifies a recurring pattern, a new environment variable, or deduces a rule that isn't currently in its context.
+
+**How to Control the Timing**
+1. **System Prompts:** Give your agent clear instructions. Example: *"You share an organizational memory with other agents. Always search for existing solutions before asking the user. If you solve a novel problem, use the store tool to document the solution."*
+2. **Autonomous Tool Calling (ReAct):** Expose `search` and `store` as standard tools (see examples below). Modern LLMs are excellent at deciding *when* to call these based on the conversation flow and tool descriptions.
+3. **Event-Driven Lifecycle Hooks:** Implement code-level triggers in your application logic. For example, automatically run a semantic search on every new user support ticket, or trigger a background summarization/write job when a thread or task is marked "Resolved".
+
 ### Python Agent Example
 
 ```python
@@ -391,6 +410,80 @@ def search_knowledge(query: str) -> str:
     })
     results = response.json()["results"]
     return "\n\n".join([f"**{r['title']}**: {r['content']}" for r in results])
+```
+
+### JavaScript / TypeScript Agent Example
+
+```typescript
+import axios from 'axios';
+
+const SYNAPSEHUB_URL = "http://localhost:3777";
+const API_KEY = "your-agent-api-key";
+
+const client = axios.create({
+  baseURL: SYNAPSEHUB_URL,
+  headers: {
+    "Authorization": `Bearer ${API_KEY}`,
+    "Content-Type": "application/json"
+  }
+});
+
+// Store knowledge
+async function storeKnowledge() {
+  await client.post('/api/v1/knowledge', {
+    namespace_id: "your-namespace-id",
+    title: "System Guidelines",
+    content: "All microservices must use structured JSON logging.",
+    tags: ["guidelines", "backend"],
+    source_agent: "ts-agent"
+  });
+}
+
+// Search for relevant knowledge
+async function searchKnowledge(query: string) {
+  const { data } = await client.post('/api/v1/search', {
+    query,
+    namespace: "your-namespace-id",
+    limit: 5
+  });
+  return data.results;
+}
+```
+
+### OpenAI Tool Calling Integration
+
+```python
+import json
+
+# Define the tool schema for OpenAI
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_synapsehub",
+            "description": "Search the organization's knowledge base for relevant context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query, e.g. 'How does authentication work?'"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+# When OpenAI returns a tool call for 'search_synapsehub', execute this:
+def execute_search_tool(query):
+    response = requests.post(f"{SYNAPSEHUB_URL}/api/v1/search", headers=HEADERS, json={
+        "query": query,
+        "limit": 3
+    })
+    results = response.json().get("results", [])
+    return json.dumps([{"title": r["title"], "content": r["content"]} for r in results])
 ```
 
 ### cURL Quick Reference

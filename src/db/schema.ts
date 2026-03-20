@@ -6,6 +6,8 @@ import {
   timestamp,
   jsonb,
   bigint,
+  integer,
+  real,
   index,
   uniqueIndex,
   customType,
@@ -131,5 +133,158 @@ export const attachments = pgTable(
   },
   (table) => [
     index("attachments_ki_idx").on(table.knowledgeItemId),
+  ],
+);
+
+// ── Knowledge Relations (Graph Edges) ───────────────────────
+
+export const knowledgeRelations = pgTable(
+  "knowledge_relations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sourceId: uuid("source_id").references(() => knowledgeItems.id, { onDelete: "cascade" }).notNull(),
+    targetId: uuid("target_id").references(() => knowledgeItems.id, { onDelete: "cascade" }).notNull(),
+    relationType: varchar("relation_type", { length: 100 }).notNull(),
+    weight: real("weight").default(1.0),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdBy: varchar("created_by", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("kr_source_idx").on(table.sourceId),
+    index("kr_target_idx").on(table.targetId),
+    index("kr_type_idx").on(table.relationType),
+    uniqueIndex("kr_source_target_type_idx").on(table.sourceId, table.targetId, table.relationType),
+  ],
+);
+
+// ── Workflow Templates ──────────────────────────────────────
+
+export const workflowTemplates = pgTable(
+  "workflow_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    namespaceId: uuid("namespace_id").references(() => namespaces.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    version: integer("version").default(1).notNull(),
+    status: varchar("status", { length: 50 }).default("draft").notNull(),
+    triggerConditions: jsonb("trigger_conditions").$type<Record<string, unknown>>(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdBy: varchar("created_by", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("wt_namespace_idx").on(table.namespaceId),
+    index("wt_status_idx").on(table.status),
+  ],
+);
+
+// ── Workflow Steps ──────────────────────────────────────────
+
+export const workflowSteps = pgTable(
+  "workflow_steps",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id").references(() => workflowTemplates.id, { onDelete: "cascade" }).notNull(),
+    stepKey: varchar("step_key", { length: 100 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    stepType: varchar("step_type", { length: 50 }).notNull(),
+    config: jsonb("config").$type<Record<string, unknown>>().default({}),
+    knowledgeItemId: uuid("knowledge_item_id").references(() => knowledgeItems.id, { onDelete: "set null" }),
+    position: jsonb("position").$type<{ x: number; y: number }>(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  },
+  (table) => [
+    index("ws_template_idx").on(table.templateId),
+    uniqueIndex("ws_template_key_idx").on(table.templateId, table.stepKey),
+  ],
+);
+
+// ── Workflow Step Edges (DAG) ───────────────────────────────
+
+export const workflowStepEdges = pgTable(
+  "workflow_step_edges",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id").references(() => workflowTemplates.id, { onDelete: "cascade" }).notNull(),
+    fromStepId: uuid("from_step_id").references(() => workflowSteps.id, { onDelete: "cascade" }).notNull(),
+    toStepId: uuid("to_step_id").references(() => workflowSteps.id, { onDelete: "cascade" }).notNull(),
+    condition: jsonb("condition").$type<Record<string, unknown>>(),
+    label: varchar("label", { length: 255 }),
+  },
+  (table) => [
+    index("wse_template_idx").on(table.templateId),
+    index("wse_from_idx").on(table.fromStepId),
+    index("wse_to_idx").on(table.toStepId),
+  ],
+);
+
+// ── Workflow Executions ─────────────────────────────────────
+
+export const workflowExecutions = pgTable(
+  "workflow_executions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id").references(() => workflowTemplates.id).notNull(),
+    namespaceId: uuid("namespace_id").references(() => namespaces.id, { onDelete: "cascade" }).notNull(),
+    status: varchar("status", { length: 50 }).notNull(),
+    initiatedBy: varchar("initiated_by", { length: 255 }),
+    context: jsonb("context").$type<Record<string, unknown>>().default({}),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("we_template_idx").on(table.templateId),
+    index("we_namespace_idx").on(table.namespaceId),
+    index("we_status_idx").on(table.status),
+  ],
+);
+
+// ── Workflow Step Executions ────────────────────────────────
+
+export const workflowStepExecutions = pgTable(
+  "workflow_step_executions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    executionId: uuid("execution_id").references(() => workflowExecutions.id, { onDelete: "cascade" }).notNull(),
+    stepId: uuid("step_id").references(() => workflowSteps.id).notNull(),
+    status: varchar("status", { length: 50 }).notNull(),
+    input: jsonb("input").$type<Record<string, unknown>>(),
+    output: jsonb("output").$type<Record<string, unknown>>(),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("wste_execution_idx").on(table.executionId),
+    index("wste_step_idx").on(table.stepId),
+    index("wste_status_idx").on(table.status),
+  ],
+);
+
+// ── Work Patterns ───────────────────────────────────────────
+
+export const workPatterns = pgTable(
+  "work_patterns",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    namespaceId: uuid("namespace_id").references(() => namespaces.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    patternType: varchar("pattern_type", { length: 50 }).notNull(),
+    frequency: integer("frequency").default(0),
+    confidence: real("confidence").default(0),
+    patternData: jsonb("pattern_data").$type<Record<string, unknown>>().notNull(),
+    sourceExecutionIds: uuid("source_execution_ids").array(),
+    discoveredAt: timestamp("discovered_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("wp_namespace_idx").on(table.namespaceId),
+    index("wp_type_idx").on(table.patternType),
   ],
 );

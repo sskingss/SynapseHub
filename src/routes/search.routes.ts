@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { SearchService } from "../services/search.service.js";
+import type { GraphService } from "../services/graph.service.js";
 
 const searchSchema = z.object({
   query: z.string().min(1),
@@ -13,7 +14,14 @@ const searchSchema = z.object({
   mode: z.enum(["hybrid", "semantic", "fulltext"]).default("hybrid"),
 });
 
-export function searchRoutes(searchService: SearchService) {
+const graphSearchSchema = searchSchema.extend({
+  include_relations: z.boolean().default(true),
+  relation_depth: z.number().min(1).max(3).default(1),
+});
+
+export function searchRoutes(searchService: SearchService, graphService: GraphService) {
+  searchService.setGraphService(graphService);
+
   return async function (app: FastifyInstance) {
     app.post("/api/v1/search", async (req) => {
       const body = searchSchema.parse(req.body);
@@ -43,6 +51,18 @@ export function searchRoutes(searchService: SearchService) {
       return {
         query: body.query,
         mode: "fulltext",
+        count: results.length,
+        results,
+      };
+    });
+
+    app.post("/api/v1/search/graph", async (req) => {
+      const body = graphSearchSchema.parse(req.body);
+      const results = await searchService.graphSearch(body);
+      return {
+        query: body.query,
+        mode: "graph",
+        relation_depth: body.relation_depth,
         count: results.length,
         results,
       };
